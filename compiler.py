@@ -1,4 +1,4 @@
-from typing import Set, Dict, Tuple
+from typing import Set, Dict
 import sys
 import traceback
 from dataclasses import dataclass
@@ -8,7 +8,6 @@ import cs202_support.x86 as x86
 import constants
 import cfun
 import print_x86defs
-from cs202_support import ast_pretty_printer as ast_printer
 
 from interference_graph import InterferenceGraph
 
@@ -20,6 +19,7 @@ global_values = ['free_ptr', 'fromspace_end']
 
 tuple_var_types = {}
 function_names = set()
+
 
 def log(label, value):
     if global_logging:
@@ -49,12 +49,12 @@ def gensym(x):
 ##################################################
 # typecheck
 ##################################################
-# op     ::= "add" | "sub" | "mult" | "not" | "or" | "and" | "eq" | "gt" | "gte" | "lt" | "lte"
-#          | "tuple" | "subscript"
-# Expr   ::= Var(x) | Constant(n) | Prim(op, List[Expr]) | Begin(Stmts, Expr)
-#          | Call(Expr, List[Expr])
-# Stmt   ::= Assign(x, Expr) | Print(Expr) | If(Expr, Stmts, Stmts) | While(Expr, Stmts)
-#          | Return(Expr) | FunctionDef(str, List[Tuple[str, type]], List[Stmt], type)
+# op   ::= "add" | "sub" | "mult" |
+#          "not" | "or" | "and" | "eq" | "gt" | "gte" | "lt" | "lte" |
+#          "tuple" | "subscript"
+# Expr ::= Var(x) | Constant(n) | Prim(op, List[Expr]) | Begin(Stmts, Expr) | Call(Expr, List[Expr])
+# Stmt   ::= Assign(x, Expr) | Print(Expr) | If(Expr, Stmts, Stmts) | While(Expr, Stmts) |
+#            Return(Expr) | FunctionDef(str, List[Tuple[str, type]], List[Stmt], type)
 # Stmts  ::= List[Stmt]
 # LFun   ::= Program(Stmts)
 
@@ -74,18 +74,14 @@ def typecheck(prog: Program) -> Program:
     :return: The program, if it is well-typed
     """
 
-    def tc_expr(e: Expr, env: Type_Env) -> type | tuple:
+    def tc_expr(expr: Expr, env: Type_Env) -> type | tuple:
         """
-        Supports
-            Expr ::= Var(x) | Constant(n) | Prim(op, List[Expr]) | Begin(Stmts, Expr)
-            op   ::= "add" | "sub" | "mult" |
-                     "not" | "or" | "and" | "eq" | "gt" | "gte" | "lt" | "lte" |
-                     "tuple" | "subscript"
-        :param e: Expression to typecheck
+        Typechecks a single expression and returns the type of the result of the expression
+        :param expr: Expression to typecheck
         :param env: Dictionary of previously initialized variables and their types
         :return: The type of result of the given expression
         """
-        match e:
+        match expr:
             case Call(func_name, args):
                 function_type = tc_expr(func_name, env)
                 assert (isinstance(function_type, Callable))
@@ -106,7 +102,7 @@ def typecheck(prog: Program) -> Program:
                 if isinstance(n, bool) or isinstance(n, int):
                     return type(n)
                 else:
-                    raise Exception('tc_expr, Constant', e)
+                    raise Exception('tc_expr, Constant', expr)
 
             case Begin(stmts, expr_args):
                 tc_stmts(stmts, env)
@@ -139,7 +135,7 @@ def typecheck(prog: Program) -> Program:
 
                         return tuple(types)
 
-                    case "subscript":  # TODO: args are [e1, Constant(idx)]
+                    case "subscript":
                         tuple_to_subscript = expr_args[0]
                         subscript = expr_args[1]
 
@@ -151,16 +147,14 @@ def typecheck(prog: Program) -> Program:
                         return tuple_types[subscript.val]
 
                     case _:
-                        raise Exception("tc_exp, prim", e)
+                        raise Exception("tc_exp, prim", expr)
 
             case _:
-                raise Exception("tc_expr", e)
+                raise Exception("tc_expr", expr)
 
-    def tc_stmt(stmt: Stmt, env: Type_Env):
+    def tc_stmt(stmt: Stmt, env: Type_Env) -> None:
         """
         Typechecks a statement
-        Supports
-            Stmt ::= Assign(x, Expr) | Print(Expr) | If(Expr, Stmts, Stmts) | While(Expr, Stmts)
         :param stmt: The statement to typecheck
         :param env: Dictionary of previously initialized variables and their types
         """
@@ -183,18 +177,17 @@ def typecheck(prog: Program) -> Program:
 
                 tc_stmts(body_stmts, new_env)
 
-                # TODO
                 for name, varType in new_env.items():
                     tuple_var_types[name] = varType
 
             case Return(e):
                 assert (tc_expr(e, env) == env["retval"])
 
-            case Assign(x, expr):
-                if x in env:
-                    assert env[x] == tc_expr(expr, env)
+            case Assign(var, expr):
+                if var in env:
+                    assert env[var] == tc_expr(expr, env)
                 else:
-                    env[x] = tc_expr(expr, env)
+                    env[var] = tc_expr(expr, env)
 
             case Print(expr):
                 tc_expr(expr, env)
@@ -214,13 +207,12 @@ def typecheck(prog: Program) -> Program:
             case _:
                 raise Exception("tc_stmt", stmt)
 
-    def tc_stmts(stmts: List[Stmt], env: Type_Env):
+    def tc_stmts(stmts: List[Stmt], env: Type_Env) -> None:
         """
         Typechecks a list of statements
         :param stmts: The list of statements to typecheck
-        :param env:
+        :param env: Dictionary of previously initialized variables and their types
         """
-
         for stmt in stmts:
             tc_stmt(stmt, env)
 
@@ -228,9 +220,12 @@ def typecheck(prog: Program) -> Program:
             if isinstance(env[var], tuple):
                 tuple_var_types[var] = env[var]
 
+    # A dictionary of previously initialized variables and their types
     environment = {}
+
     tc_stmts(prog.stmts, environment)
     return prog
+
 
 ##################################################
 # compress-parameters
@@ -244,17 +239,30 @@ def typecheck(prog: Program) -> Program:
 # Stmts  ::= List[Stmt]
 # LFun   ::= Program(Stmts)
 
-
 def compress_parameters(prog: Program) -> Program:
+    """
+    Takes any function definition or call with more than parameters than there are argument registers
+        and compresses the extra parameters into a single tuple as the final parameter.
+        Adds statements to each function body to uncompress the tuple.
+    :param prog: The ltup program to compress
+    :return: An ltup program with compressed parameters
+    """
+    # The max number of parameters
     compress_length = len(constants.argument_registers)
+    # The name of the compressed tuple parameter
+    compressed_param_name = "rest"
 
     def cp_function_def(function: FunctionDef) -> FunctionDef:
-        compressed_param_name = "rest"
-
+        """
+        Compresses the extra parameters of a function definition
+            and adds statements to uncompress the parameters to the body statements.
+        :param function: The function definition to compress
+        :return: The compressed function definition
+        """
         params = function.params
 
-        non_compressed_params = tuple(params[0:compress_length-1])
-        compressed_params = tuple(params[compress_length-1:])
+        non_compressed_params = tuple(params[0:compress_length - 1])
+        compressed_params = tuple(params[compress_length - 1:])
 
         # Add non-compressed parameters unchanged
         new_params = []
@@ -271,18 +279,22 @@ def compress_parameters(prog: Program) -> Program:
         new_body_stmts = function.body
         for index, param in enumerate(compressed_params):
             param_name = param[0]
-            param_type = param[1]
 
             decompress_stmt = Assign(param_name, Prim("subscript", [Var(compressed_param_name), Constant(index)]))
             new_body_stmts.insert(0, decompress_stmt)
 
         return FunctionDef(function.name, new_params, new_body_stmts, function.return_type)
 
-    def cp_function_call(call: Call):
+    def cp_function_call(call: Call) -> Call:
+        """
+        Compresses the parameters in any function call to match the compressed function definition
+        :param call: The function call to be compressed
+        :return: The compressed function call
+        """
         args = call.args
 
-        uncompressed_args = args[0:compress_length-1]
-        compressed_args = args[compress_length-1:]
+        uncompressed_args = args[0:compress_length - 1]
+        compressed_args = args[compress_length - 1:]
 
         new_args = []
         for arg in uncompressed_args:
@@ -290,24 +302,23 @@ def compress_parameters(prog: Program) -> Program:
 
         new_args.append(Prim("tuple", compressed_args))
 
-        return new_args
+        return Call(call.function, new_args)
 
     def cp_expr(expr: Expr) -> Expr:
         """
-
-        Supports
-            Expr   ::= Var(x) | Constant(n) | Prim(op, List[Expr]) |
-            Begin(Stmts, Expr) | Call(Expr, List[Expr])
+        Compresses any stand-alone Call expressions and Call expression that are within other expressions
+        :param expr: The expression to be compressed
+        :return: The compressed expression
         """
         match expr:
             case Call(func_var, args):
                 call = Call(func_var, args)
                 if len(args) > compress_length:
-                    new_args = cp_function_call(call)
+                    new_call = cp_function_call(call)
                 else:
-                    new_args = args
+                    new_call = call
 
-                return Call(func_var, new_args)
+                return new_call
 
             case Prim(op, args):
                 new_args = []
@@ -324,13 +335,9 @@ def compress_parameters(prog: Program) -> Program:
 
     def cp_stmt(stmt: Stmt) -> Stmt:
         """
-
-        Supports
-            Stmt ::= Assign(x, Expr) | Print(Expr) |
-                     If(Expr, Stmts, Stmts) | While(Expr, Stmts) | Return(Expr) |
-                     FunctionDef(str, List[Tuple[str, type]], List[Stmt], type)
-        :param stmt:
-        :return:
+        Compresses a statement
+        :param stmt: The statement to compress
+        :return: The compressed statement
         """
         match stmt:
             # Compress the parameters in the function definition
@@ -364,13 +371,17 @@ def compress_parameters(prog: Program) -> Program:
                 return Return(cp_expr(expr))
 
     def cp_stmts(stmts: List[Stmt]) -> List[Stmt]:
+        """
+        Compresses a list of statements
+        :param stmts: The statements to be compressed
+        :return: The compressed statements
+        """
         new_stmts = []
         for stmt in stmts:
             new_stmts.append(cp_stmt(stmt))
 
         return new_stmts
 
-    # print(ast_printer.print_ast(Program(cp_stmts(prog.stmts))))
     return Program(cp_stmts(prog.stmts))
 
 
@@ -386,7 +397,6 @@ def compress_parameters(prog: Program) -> Program:
 # Stmts  ::= List[Stmt]
 # LFun   ::= Program(Stmts)
 
-
 def rco(prog: Program) -> Program:
     """
     Removes complex operands. After this pass, the arguments to operators (unary and binary
@@ -398,11 +408,6 @@ def rco(prog: Program) -> Program:
     def rco_expr(e: Expr, bindings: Dict[str, Expr]) -> Expr:
         """
         Converts non-atomic expressions into atomic ones
-        Supports
-            Expr ::= Var(x) | Constant(n) | Prim(op, List[Expr])
-            op   ::= "add" | "sub" | "mult" |
-                     "not" | "or" | "and" | "eq" | "gt" | "gte" | "lt" | "lte" |
-                     "tuple" | "subscript"
         :param e: Expression to be converted
         :param bindings: List of variable assignments necessary to make all expressions atomic
         :return: An atomic version of e. If e is atomic already, return unchanged.
@@ -434,24 +439,18 @@ def rco(prog: Program) -> Program:
                 return Var(new_label)
 
             case Prim(op, args):
-                match op:
-                    # case "tuple":
-                    #     pass
-                    # case "subscript":
-                    #     pass
-                    case _:
-                        # The recursive call to rco_exp should make the arguments atomic
-                        new_args = []
-                        for arg in args:
-                            new_args.append(rco_expr(arg, bindings))
+                # The recursive call to rco_exp should make the arguments atomic
+                new_args = []
+                for arg in args:
+                    new_args.append(rco_expr(arg, bindings))
 
-                        tmp = gensym("tmp")
+                tmp = gensym("tmp")
 
-                        # Bind tmp to Prim(op, new_args)
-                        bindings[tmp] = Prim(op, new_args)
+                # Bind tmp to Prim(op, new_args)
+                bindings[tmp] = Prim(op, new_args)
 
-                        # Return the variable
-                        return Var(tmp)
+                # Return the variable
+                return Var(tmp)
 
             case _:
                 raise Exception("rco_exr", e)
@@ -459,8 +458,6 @@ def rco(prog: Program) -> Program:
     def rco_stmt(s: Stmt, bindings: Dict[str, Expr]) -> Stmt:
         """
         Converts all non-atomic expressions in a statement to atomic ones
-        Supports
-            Stmt ::= Assign(x, Expr) | Print(Expr) | If(Expr, Stmts, Stmts) | While(Expr, Stmts)
         :param s: Statement to be converted
         :param bindings: List of variable assignments necessary to make all expressions atomic
         :return: An atomic version of s
@@ -522,6 +519,7 @@ def rco(prog: Program) -> Program:
     # print(ast_printer.print_ast(Program(rco_stmts(prog.stmts))))
     return Program(rco_stmts(prog.stmts))
 
+
 ##################################################
 # expose-allocation
 ##################################################
@@ -536,15 +534,14 @@ def rco(prog: Program) -> Program:
 
 def expose_alloc(prog: Program) -> Program:
     """
-    Exposes allocations in an Ltup program. Replaces tuple(...) with explicit
-    allocation.
+    Exposes allocations in an Ltup program. Replaces tuple(...) with explicit allocation.
     :param prog: An Ltup program
     :return: An Ltup program, without Tuple constructors
     """
 
-    def create_tag(types: tuple):
+    def create_tag(types: tuple) -> int:
         """
-        Create the tag for a tuple
+        Creates the tag for a tuple
         :param types: A tuple containing the types of every element in the tuple
         """
         tag = 0
@@ -567,6 +564,11 @@ def expose_alloc(prog: Program) -> Program:
         return tag
 
     def ea_stmt(stmt: Stmt) -> List[Stmt]:
+        """
+        Exposes tuple allocations in a statement and calls the garbage collector if needed
+        :param stmt: The statement to expose
+        :return: The statement with tuples allocated explicitly
+        """
         match stmt:
             case FunctionDef(name, params, body_stmts, return_type):
                 return [FunctionDef(name, params, ea_stmts(body_stmts), return_type)]
@@ -611,22 +613,26 @@ def expose_alloc(prog: Program) -> Program:
                 return [stmt]
 
     def ea_stmts(stmts: List[Stmt]) -> List[Stmt]:
+        """
+        Exposes tuple allocations in a list of statements
+        :param stmts: The statements to expose
+        :return: The statements with tuples allocated explicitly
+        """
         new_stmts = []
         for stmt in stmts:
             new_stmts.extend(ea_stmt(stmt))
 
         return new_stmts
 
-    # print(ast_printer.print_ast(Program(ea_stmts(prog.stmts))))
     return Program(ea_stmts(prog.stmts))
 
 
 ##################################################
 # explicate-control
 ##################################################
+# Atm    ::= Var(x) | Constant(n)
 # op     ::= "add" | "sub" | "mult" | "not" | "or" | "and" | "eq" | "gt" | "gte" | "lt" | "lte"
 #          | "subscript" | "allocate" | "collect" | "tuple_set"
-# Atm    ::= Var(x) | Constant(n)
 # Expr   ::= Atm | Prim(op, List[Expr])
 #          | Call(Expr, List[Expr])
 # Stmt   ::= Assign(x, Expr) | Print(Expr) | If(Expr, Stmts, Stmts) | While(Begin(Stmts, Expr), Stmts)
@@ -659,8 +665,6 @@ def explicate_control(prog: Program) -> cfun.CProgram:
     def ec_atm(e: Expr) -> cfun.Atm:
         """
         Converts an Lif atomic expression into a Cif atomic
-        Supports
-            Atm ::= Constant(n) | Var(x)
         :param e: The atomic expression to be converted
         :return: The Cif version of e
         """
@@ -677,19 +681,11 @@ def explicate_control(prog: Program) -> cfun.CProgram:
     def ec_expr(e: Expr) -> cfun.Expr:
         """
         Converts an Lfun expression into a Cfun expression
-        Supports
-            Stmt ::= Assign(x, Expr) | Print(Expr) | If(Expr, Stmts, Stmts) | While(Begin(Stmts, Expr), Stmts)
-            Expr ::= Atm | Prim(op, List[Expr])
-            op   ::= "add" | "sub" | "mult" |
-                     "not" | "or" | "and" | "eq" | "gt" | "gte" | "lt" | "lte" |
-                     "subscript" | "allocate" | "collect" | "tuple_set"
-            Atm  ::= Constant(n) | Var(x)
         :param e: The expression to be converted
         :return: The Cif version of e
         """
         match e:
             case Call(function, args):
-                # TODO: similar to Prim, use cfun.Call
                 new_args = []
                 for arg in args:
                     new_args.append(ec_atm(arg))
@@ -714,8 +710,6 @@ def explicate_control(prog: Program) -> cfun.CProgram:
     def ec_stmt(s: Stmt, continuation: List[cfun.Stmt]) -> List[cfun.Stmt]:
         """
         Converts a statement and its continuation into an equivalent list of CIf statements
-        Supports
-            Stmt ::= Assign(x, Expr) | Print(Expr) | If(Expr, Stmts, Stmts) | While(Begin(Stmts, Expr), Stmts)
         :param s: The statement to be converted
         :param continuation: The statements that are done after s
         :return: A list of Cif statements equivalent to s and its continuation
@@ -727,7 +721,6 @@ def explicate_control(prog: Program) -> cfun.CProgram:
                 new_return = [cfun.Return(new_expr)]
                 return new_return
 
-            # TODO?
             case FunctionDef(name, params, body_stmts, return_type):
                 ec_function(name, params, body_stmts)
                 return continuation
@@ -781,7 +774,6 @@ def explicate_control(prog: Program) -> cfun.CProgram:
 
         return continuation
 
-    # TODO
     def ec_function(name: str, params: List[Tuple[str, type]], body_stmts: List[Stmt]):
         # Prevents python from creating new shadowed variables
         nonlocal basic_blocks
@@ -795,7 +787,6 @@ def explicate_control(prog: Program) -> cfun.CProgram:
         basic_blocks = {}
         current_function = name
 
-        # TODO: adding return 0 where it shouldn't be
         new_stmts = ec_stmts(body_stmts, continuation=[cfun.Return(cfun.Constant(0))])
 
         basic_blocks[(name + "start")] = new_stmts
@@ -819,17 +810,19 @@ def explicate_control(prog: Program) -> cfun.CProgram:
 
     functions.append(cfun.CFunctionDef("main", [], basic_blocks))
 
-    # print(ast_printer.print_ast(cfun.CProgram(functions)))
     return cfun.CProgram(functions)
 
 
 ##################################################
 # select-instructions
 ##################################################
-
-
+# Atm ::= Constant(n) | Var(x)
+# op           ::= "add" | "sub" | "mult" |
+#                   "not" | "or" | "and" | "eq" | "gt" | "gte" | "lt" | "lte" |
+#                   "subscript" | "allocate" | "collect" | "tuple_set"
 # Expr         ::= Atm | Prim(op, List[Expr])
-
+# Stmt         ::= Assign(x, Expr) | Print(Expr) |
+#                  If(Expr, Goto(label), Goto(label)) | Goto(label) | Return(Expr)
 # Stmts        ::= List[Stmt]
 # CFunctionDef ::= CFunctionDef(name, List[str], Dict[label, Stmts])
 # Cfun         ::= CProgram(List[CFunctionDef])
@@ -852,7 +845,6 @@ def select_instructions(prog: cfun.CProgram) -> X86ProgramDefs:
     :param prog: a Ltup program
     :return: a pseudo-x86 program
     """
-
     current_function_name = 'main'
 
     op_instructions = {
@@ -874,8 +866,6 @@ def select_instructions(prog: cfun.CProgram) -> X86ProgramDefs:
     def si_atm(atm: cfun.Atm) -> x86.Arg:
         """
         Converts an LIf atomic in an x86 atomic
-        Supports
-            Atm ::= Constant(n) | Var(x)
         :param atm: The atomic to be converted
         :return: The x86 equivalent to atm
         """
@@ -884,7 +874,6 @@ def select_instructions(prog: cfun.CProgram) -> X86ProgramDefs:
                 return x86.Immediate(int(i))
 
             case cfun.Var(x):
-                # TODO: change to match statement if possible
                 if x in global_values:
                     return x86.GlobalVal(x)
                 elif x in function_names:
@@ -898,13 +887,6 @@ def select_instructions(prog: cfun.CProgram) -> X86ProgramDefs:
     def si_stmt(stmt: cfun.Stmt) -> List[x86.Instr]:
         """
         Converts a Cif statement into one or more x86 instructions
-        Supports
-            Stmt ::= Assign(x, Expr) | Print(Expr) |
-                     If(Expr, Goto(label), Goto(label)) | Goto(label) | Return(Expr)
-            Expr ::= Atm | Prim(op, List[Expr])
-            op   ::= "add" | "sub" | "mult" |
-                     "not" | "or" | "and" | "eq" | "gt" | "gte" | "lt" | "lte" |
-                     "subscript" | "allocate" | "collect" | "tuple_set"
         :param stmt: The statement to be converted
         :return: A list of pseudo-x86 statements equivalent to stmt
         """
@@ -998,7 +980,7 @@ def select_instructions(prog: cfun.CProgram) -> X86ProgramDefs:
 
             case cfun.Return(a1):
                 return [x86.NamedInstr("movq", [si_atm(a1), x86.Reg("rax")]),
-                        x86.Jmp(current_function_name+"conclusion")]
+                        x86.Jmp(current_function_name + "conclusion")]
 
             case _:
                 raise Exception("si_stmt", stmt)
@@ -1015,7 +997,6 @@ def select_instructions(prog: cfun.CProgram) -> X86ProgramDefs:
 
         return instrs
 
-    # TODO: test
     def si_def(func_def: cfun.CFunctionDef) -> X86FunctionDef:
         nonlocal current_function_name
 
@@ -1035,13 +1016,12 @@ def select_instructions(prog: cfun.CProgram) -> X86ProgramDefs:
         # Add setup instructions to start of block
         new_blocks[current_function_name + "start"] = arg_instrs + new_blocks[current_function_name + "start"]
 
-        return X86FunctionDef(func_def.name, new_blocks, (None, None))
+        return X86FunctionDef(func_def.name, new_blocks, (0, 0))
 
     x86_functions = []
     for function_def in prog.defs:
         x86_functions.append(si_def(function_def))
 
-    # print(ast_printer.print_ast(X86ProgramDefs(x86_functions)))
     return X86ProgramDefs(x86_functions)
 
 
@@ -1083,11 +1063,16 @@ def allocate_registers(prog: X86ProgramDefs) -> X86ProgramDefs:
         new_function_def = X86FunctionDef(function_def.label, result_mini_prog.blocks, result_mini_prog.stack_space)
         new_defs.append(new_function_def)
 
-    # print(ast_printer.print_ast(X86ProgramDefs(new_defs)))
     return X86ProgramDefs(new_defs)
 
 
 def _allocate_registers(name: str, prog: x86.X86Program) -> x86.X86Program:
+    """
+    Allocates registers for a single function of the program
+    :param name: The name of the function
+    :param prog: The section of code to be allocated
+    :return: The section of code with its registers allocated
+    """
     # --------------------------------------------------
     # utilities
     # --------------------------------------------------
@@ -1097,7 +1082,7 @@ def _allocate_registers(name: str, prog: x86.X86Program) -> x86.X86Program:
     basic_blocks = prog.blocks
 
     live_after_sets: Dict[str, List[Set[x86.Var]]] = {}
-    live_before_sets: Dict[str, Set[x86.Var]] = {name+"conclusion": set()}
+    live_before_sets: Dict[str, Set[x86.Var]] = {name + "conclusion": set()}
     for label in basic_blocks.keys():
         live_before_sets[label] = set()
 
@@ -1115,8 +1100,6 @@ def _allocate_registers(name: str, prog: x86.X86Program) -> x86.X86Program:
     def vars_of_arg(a: x86.Arg) -> Set[x86.Var] | Set[x86.Reg]:
         """
         Returns variable in an argument if there is any
-        Supports
-            Arg ::= Immediate(i) | Reg(r) | ByteReg(r) | Var(x) | Deref(r, offset) | GlobalVal(x)
         :param a: Argument to check
         :return: x86 variable if variable present, empty set otherwise
         """
@@ -1137,14 +1120,9 @@ def _allocate_registers(name: str, prog: x86.X86Program) -> x86.X86Program:
     def reads_of(instr: x86.Instr) -> Set[x86.Var]:
         """
         Returns a set of variables read by a given instruction
-        Supports
-            Instr  ::= NamedInstr(op, List[Arg]) | Callq(label) | Retq() |
-                       Jmp(label) | JmpIf(cc, label) | Set(cc, Arg)
-            op     ::= 'addq' | 'subq' | 'imulq' | 'cmpq' | 'andq' | 'orq' | 'xorq' | 'movq' | 'movzbq'
         :param instr: The instruction to check
         :return: The variables read by instruction i
         """
-
         match instr:
             case x86.NamedInstr(op, [e1, e2]):
                 match op:
@@ -1158,11 +1136,10 @@ def _allocate_registers(name: str, prog: x86.X86Program) -> x86.X86Program:
                 # Return all variables in the destination's live-before set
                 return live_before_sets[label]
 
-            # TODO: Don't understand this
             case x86.IndirectCallq(e1):
                 return vars_of_arg(e1)
 
-            case x86.Callq() | x86.Retq | x86.Set():  # TODO: retq might not be in right place
+            case x86.Callq() | x86.Retq | x86.Set():
                 return set()
 
             case _:
@@ -1171,14 +1148,9 @@ def _allocate_registers(name: str, prog: x86.X86Program) -> x86.X86Program:
     def writes_of(instr: x86.Instr) -> Set[x86.Var]:
         """
         Returns a set of variables written by a given instruction
-        Supports
-            Instr  ::= NamedInstr(op, List[Arg]) | Callq(label) |
-                       Jmp(label) | JmpIf(cc, label) | Set(cc, Arg)
-            op     ::= 'addq' | 'subq' | 'imulq' | 'cmpq' | 'andq' | 'orq' | 'xorq' | 'movq' | 'movzbq'
         :param instr: The instruction to check
         :return: The variables written by instruction i
         """
-
         match instr:
             case x86.NamedInstr(i, [e1, e2]):
                 match i:
@@ -1194,7 +1166,11 @@ def _allocate_registers(name: str, prog: x86.X86Program) -> x86.X86Program:
             case _:
                 raise Exception("allocate_registers, writes_of", instr)
 
-    def get_stack_locations_used():
+    def get_stack_locations_used() -> Tuple[int, int]:
+        """
+        Gets the number of stack and root stack locations used
+        :return: A tuple in the form (<# stack locations>, <# root stack locations>)
+        """
         stack_locations = 0
         root_stack_locations = 0
 
@@ -1225,7 +1201,7 @@ def _allocate_registers(name: str, prog: x86.X86Program) -> x86.X86Program:
 
         return live_after.difference(writes_of(instr)).union(reads_of(instr))
 
-    def ul_block(label: str):
+    def ul_block(label: str) -> None:
         """
         Given a label, calculate and save the live-after sets and live-before set of the block with that label
         :param label: The label of the block to be checked
@@ -1249,7 +1225,7 @@ def _allocate_registers(name: str, prog: x86.X86Program) -> x86.X86Program:
         # At the end, reverse the list of live-after sets and save it
         live_after_sets[label] = list(reversed(block_live_after_sets))
 
-    def ul_fixpoint(labels: List[str]):
+    def ul_fixpoint(labels: List[str]) -> None:
         old_live_afters = live_after_sets.copy()
 
         while True:
@@ -1264,7 +1240,13 @@ def _allocate_registers(name: str, prog: x86.X86Program) -> x86.X86Program:
     # --------------------------------------------------
     # interference graph
     # --------------------------------------------------
-    def bi_instr(instr: x86.Instr, live_after: Set[x86.Var], graph: InterferenceGraph):
+    def bi_instr(instr: x86.Instr, live_after: Set[x86.Var], graph: InterferenceGraph) -> None:
+        """
+        Adds to the interference graph for a single instruction
+        :param instr: The instruction whose interference information should be added to the graph
+        :param live_after: The live-after set for the given instruction
+        :param graph: The interference graph to be added to
+        """
         match instr:
             case x86.Callq("collect"):
                 for live_var in live_after:
@@ -1273,8 +1255,7 @@ def _allocate_registers(name: str, prog: x86.X86Program) -> x86.X86Program:
                         graph.add_edge(live_var, x86.Reg(reg))
 
                     # Forces compiler to move all tuple vars to the root stack
-                    # TODO: Don't understand how
-                    if isinstance(live_var, x86.Var) and live_var.var in tuple_var_types:  # TODO
+                    if isinstance(live_var, x86.Var) and live_var.var in tuple_var_types:
                         for reg in constants.callee_saved_registers:
                             graph.add_edge(x86.Reg(reg), live_var)
 
@@ -1290,6 +1271,12 @@ def _allocate_registers(name: str, prog: x86.X86Program) -> x86.X86Program:
                         graph.add_edge(written_var, live_after_var)
 
     def bi_block(instrs: List[x86.Instr], live_afters: List[Set[x86.Var]], graph: InterferenceGraph):
+        """
+        Builds the interference graph for a single block of code
+        :param instrs: The list of instructions to be checked for interference
+        :param live_afters: The live-after sets for the list of instructions
+        :param graph: The graph object to add the interference information into
+        """
         for i in range(0, len(instrs)):
             bi_instr(instrs[i], live_afters[i], graph)
 
@@ -1300,6 +1287,14 @@ def _allocate_registers(name: str, prog: x86.X86Program) -> x86.X86Program:
                     interference_graph: InterferenceGraph,
                     regular_locations: List[x86.Arg],
                     tuple_locations: List[x86.Arg]) -> Coloring:
+        """
+        Colors the graph
+        :param local_vars: The set of variables of the current function
+        :param interference_graph: The interference graph to color
+        :param regular_locations: The possible locations for any non-tuple variable
+        :param tuple_locations: The possible locations for any tuple variable
+        :return: A dictionary mapping variables to their locations
+        """
 
         # Fill each saturation set with all registers that are neighbors of each variable
         saturation_sets: Dict[x86.Var, Saturation] = {}
@@ -1342,11 +1337,12 @@ def _allocate_registers(name: str, prog: x86.X86Program) -> x86.X86Program:
     # --------------------------------------------------
     # assigning homes
     # --------------------------------------------------
-    # Match for each Arg: registers, variables, immediates
-    # For variable case:
-    #   if 'a' in homes return homes[a],
-    #   else create new home (Deref node), save it to homes, return homes[a]
     def ah_arg(arg: x86.Arg) -> x86.Arg:
+        """
+        Swaps variables for their homes
+        :param arg: The argument to get the home of
+        :return: If the given argument is a variable, returns its home; Otherwise, returns the unchanged argument
+        """
         match arg:
             case x86.Immediate() | x86.Reg() | x86.ByteReg() | x86.GlobalVal() | x86.Deref():
                 return arg
@@ -1357,10 +1353,12 @@ def _allocate_registers(name: str, prog: x86.X86Program) -> x86.X86Program:
             case _:
                 raise Exception("ah_arg", arg)
 
-    # Match with one case per instruction type
-    #   (only need to worry about instruction w/ variables; named instructions(op, arg)).
-    # Calls ah_arg on each arg
     def ah_instr(instr: x86.Instr) -> x86.Instr:
+        """
+        Replaces variables with their homes in an instruction
+        :param instr: The instruction to assign homes in
+        :return: The instruction with the variables swapped for their homes
+        """
         match instr:
             case x86.NamedInstr(op, args):
                 new_args = []
@@ -1382,6 +1380,11 @@ def _allocate_registers(name: str, prog: x86.X86Program) -> x86.X86Program:
                 raise Exception("ah_instr", instr)
 
     def ah_block(instrs: List[x86.Instr]) -> List[x86.Instr]:
+        """
+        Assigns the homes for a list of instruction
+        :param instrs: The list of instructions to assign homes in
+        :return: The instructions with the variables swapped for their homes
+        """
         new_instrs = []
         for instr in instrs:
             new_instrs.append(ah_instr(instr))
@@ -1397,27 +1400,19 @@ def _allocate_registers(name: str, prog: x86.X86Program) -> x86.X86Program:
     blocks = prog.blocks
     ul_fixpoint(list(blocks.keys()))
 
-    # prints live_after sets
-    log_ast('live-after sets', live_after_sets)
-
     # Step 2: Build the interference graph
     interference_graph = InterferenceGraph()
 
     for label in blocks.keys():
         bi_block(blocks[label], live_after_sets[label], interference_graph)
 
-    log_ast('interference graph', interference_graph)
-
     # Step 3: Color the graph
-    # coloring = color_graph(all_vars, interference_graph)
-    # log('coloring', coloring)
-    #
-    # # Defines the set of registers to use
 
+    # Defines the set of registers to use
     available_registers = constants.caller_saved_registers + constants.callee_saved_registers
 
-    regular_locations = []
-    tuple_locations = []
+    regular_locations = []  # The set of registers for non-tuple variables
+    tuple_locations = []  # The set of registers for tuple variables
 
     for reg in available_registers:
         regular_locations.append(x86.Reg(reg))
@@ -1476,6 +1471,11 @@ def patch_instructions(prog: X86ProgramDefs) -> X86ProgramDefs:
 
 
 def _patch_instructions(prog: x86.X86Program) -> x86.X86Program:
+    """
+    Patches instructions for a single function
+    :param prog: The program to patch instruction of
+    :return: The program with its instructions patched
+    """
 
     def needs_patching(args: List) -> bool:
         """
@@ -1564,7 +1564,7 @@ def prelude_and_conclusion(prog: X86ProgramDefs) -> x86.X86Program:
     for function_def in prog.defs:
         mini_prog = x86.X86Program(blocks=function_def.blocks, stack_space=function_def.stack_space)
         result_mini_prog = _prelude_and_conclusion(name=function_def.label, prog=mini_prog)
-        # TODO: what is happening here?
+
         new_blocks.update(result_mini_prog.blocks)
 
     # print(ast_printer.print_ast(x86.X86Program(new_blocks)))
@@ -1573,6 +1573,10 @@ def prelude_and_conclusion(prog: X86ProgramDefs) -> x86.X86Program:
 
 def _prelude_and_conclusion(name: str, prog: x86.X86Program) -> x86.X86Program:
     """
+    Performs the prelude and conclusion pass for a single function
+    :param name: The name of the function
+    :param prog: The code of the function
+    :return: The function with the prelude and conclusion sections added
     The following registers are used for the following purposes
         rbp: the base of the current stack frame
         rsp: the 'top' of the current stack frame
@@ -1583,6 +1587,10 @@ def _prelude_and_conclusion(name: str, prog: x86.X86Program) -> x86.X86Program:
     stack_bytes, root_stack_locations = prog.stack_space
 
     def create_prelude() -> List[x86.Instr]:
+        """
+        Creates the set of instructions for the prelude
+        :return: A list of instructions
+        """
         prelude: List[x86.Instr] = []
 
         # Set up the stack frame (rsp points to the 'top' of stack from and rbp points to the 'base')
@@ -1590,8 +1598,6 @@ def _prelude_and_conclusion(name: str, prog: x86.X86Program) -> x86.X86Program:
         #   2. Store current 'top' of stack in rbp
         prelude += [x86.NamedInstr("pushq", [x86.Reg("rbp")]),
                     x86.NamedInstr("movq", [x86.Reg("rsp"), x86.Reg("rbp")])]
-
-        # TODO: last instr might need to go after next section
 
         # Save the callee-saved registers
         #   Push each onto the stack
@@ -1621,11 +1627,15 @@ def _prelude_and_conclusion(name: str, prog: x86.X86Program) -> x86.X86Program:
                          x86.NamedInstr("addq", [x86.Immediate(8), x86.Reg("r15")])]]
 
         # Jump to the start of the program
-        prelude += [x86.Jmp(name+"start")]
+        prelude += [x86.Jmp(name + "start")]
 
         return prelude
 
     def create_conclusion() -> List[x86.Instr]:
+        """
+        Creates the set of instructions for the conclusion
+        :return: A list of instructions
+        """
         conclusion: List[x86.Instr] = []
 
         # Restore rsp and r15
@@ -1697,7 +1707,7 @@ def run_compiler(s, logging=False):
 
     current_program = parse(s)
 
-    if logging == True:
+    if logging:
         print()
         print('==================================================')
         print(' Input program')
@@ -1708,7 +1718,7 @@ def run_compiler(s, logging=False):
     for pass_name, pass_fn in compiler_passes.items():
         current_program = pass_fn(current_program)
 
-        if logging == True:
+        if logging:
             print()
             print('==================================================')
             print(f' Output of pass: {pass_name}')
@@ -1738,4 +1748,3 @@ if __name__ == '__main__':
             except:
                 print('Error during compilation! **************************************************')
                 traceback.print_exception(*sys.exc_info())
-
