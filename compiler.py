@@ -1,12 +1,12 @@
 from typing import Set, Dict
 import sys
 import traceback
-from dataclasses import dataclass
 
-from cs202_support.python import *
-import cs202_support.x86 as x86
+from program_lang.python import *
+from program_lang import cfun
+from program_lang import x86
+
 import constants
-import cfun
 import print_x86defs
 
 from interference_graph import InterferenceGraph

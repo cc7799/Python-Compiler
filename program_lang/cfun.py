@@ -1,6 +1,6 @@
 from dataclasses import dataclass
-from typing import List, Set, Dict, Tuple
-from cs202_support.python import AST
+from typing import List, Dict
+from program_lang.python import AST
 
 ##################################################
 @dataclass(frozen=True, eq=True)
